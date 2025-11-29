@@ -1,5 +1,3 @@
-#!/usr/bin/env bb
-
 (ns main
   (:require [babashka.http-client :as http]
             [babashka.fs :as fs]
@@ -11,7 +9,8 @@
             [clojure.core.async
              :as async
              :refer [>! <! >!! <!! go go-loop chan buffer close! thread
-                     alts! alts!! timeout]]))
+                     alts! alts!! timeout]])
+  (:gen-class))
 
 (defn show-help
   [spec]
@@ -118,8 +117,7 @@ This will save it for future runs" {})))
                      (let [{disk-version "version" :as disk-mod} (get bmm-db (str id))]
                        (not= version disk-version)))))
         bmm-db (reduce (fn [db {id "id" {version "version"} "modfile"}]
-                         (assoc db id {"version" version})
-                         )
+                         (assoc db id {"version" version}))
                        bmm-db
                        mods)]
 
@@ -137,7 +135,7 @@ This will save it for future runs" {})))
           (recur))))
 
     (doseq [[idx mod]
-            (map-indexed (fn [a b] [a b]) (take 1 mods ))]
+            (map-indexed (fn [a b] [a b]) (take 1 mods))]
       (println (str "Started " (get mod "name")))
       (let [url (get-in mod ["modfile" "download" "binary_url"])
             file-name (get-in mod ["modfile" "filename"])
@@ -150,14 +148,12 @@ This will save it for future runs" {})))
           (println (str (inc n) "/" (count mods)) "finished " (<!! done))
           (recur (inc n)))))
     (println "Deleting tmp files...")
-    (sh/sh "rm" "-rf" "./bmm_tmp/")))
+    (go (sh/sh "rm" "-rf" "./bmm_tmp/"))))
 
-(defn -main [args]
-  (let [[opts token mod-path] (parse-args args)
-        mods (get-all-pages "https://api.mod.io/v1/me/subscribed" token {"game_id" bonelab-id})]
-    (when (:sync opts)
-      (download-subscribed mods token mod-path))))
-
-(try (-main *command-line-args*)
-     (catch clojure.lang.ExceptionInfo e
-       (println (ex-message e))))
+(defn -main [& args]
+  (try (let [[opts token mod-path] (parse-args args)
+             mods (get-all-pages "https://api.mod.io/v1/me/subscribed" token {"game_id" bonelab-id})]
+         (when (:sync opts)
+           (download-subscribed mods token mod-path)))
+       (catch clojure.lang.ExceptionInfo e
+         (println (ex-message e)))))
