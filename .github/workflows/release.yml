@@ -26,7 +26,7 @@ jobs:
       run: clojure -T:build uber
     - name: compile native-image
       
-      run: native-image ./target/*.jar --initialize-at-build-time bmm
+      run: native-image -jar ./target/*.jar --initialize-at-build-time bmm
     - name: release
       uses: ncipollo/release-action@v1
       with:
