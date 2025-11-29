@@ -12,6 +12,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - uses: zharinov/clj-toolbox@v1.0.3
     - uses: graalvm/setup-graalvm@v1.4.3
       with:
         # Java version. See examples of supported syntax in the README file.
