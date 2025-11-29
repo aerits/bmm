@@ -21,7 +21,7 @@ jobs:
         java-version: 25
     
     - name: compile uberjar
-      run: clojure T:build uberjar
+      run: clojure -T:build uberjar
     - name: compile native-image
       
       run: native-image ./target/*.jar --initialize-at-build-time bmm
