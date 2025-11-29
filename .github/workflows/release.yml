@@ -7,8 +7,10 @@ on:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
 
     steps:
     - uses: actions/checkout@v4
@@ -21,7 +23,7 @@ jobs:
         java-version: 25
     
     - name: compile uberjar
-      run: clojure -T:build uberjar
+      run: clojure -T:build uber
     - name: compile native-image
       
       run: native-image ./target/*.jar --initialize-at-build-time bmm
