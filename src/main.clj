@@ -14,8 +14,6 @@
    [clojure.java.shell :as sh])
   (:gen-class))
 
-((requiring-resolve 'hashp.install/install!))
-
 (defn show-help
   [spec]
   (cli/format-opts (merge spec {:order (vec (keys (:spec spec)))})))
