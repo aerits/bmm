@@ -123,14 +123,22 @@ This will save it for future runs" {})))
 
     (-> (fs/file bmm-db-path)
         (fs/write-lines [(json/generate-string bmm-db {:pretty true})]))
+
     (println "Updating" (count mods) "mods")
     (go-loop []
       (let [[url file-name name] (<! download)]
         (when url
           (go
-            (sh/sh "mkdir" "./bmm_tmp/")
-            (sh/sh "wcurl" url "-o" (str "./bmm_tmp/" file-name))
-            (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
+            (fs/create-dir "./bmm_tmp/")
+            (io/copy
+             (:body (http/get url {:as :stream}))
+             (io/file (str "./bmm_tmp/" file-name)))
+            (if (= "Linux" (System/getProperty "os.name"))
+              (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
+              (sh/sh "powershell" "Expand-Archive" "-LiteralPath"
+                     (fs/absolutize (str "./bmm_tmp/" file-name))
+                     "-DestinationPath"
+                     path))
             (>! done name))
           (recur))))
 
@@ -148,7 +156,7 @@ This will save it for future runs" {})))
           (println (str (inc n) "/" (count mods)) "finished " (<!! done))
           (recur (inc n)))))
     (println "Deleting tmp files...")
-    (go (sh/sh "rm" "-rf" "./bmm_tmp/"))))
+    (fs/delete (fs/file "./bmm_tmp/"))))
 
 (defn -main [& args]
   (try (let [[opts token mod-path] (parse-args args)
