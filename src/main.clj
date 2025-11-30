@@ -27,11 +27,14 @@
            :desc "Show help"}
     :token {:desc "Mod.io OAuth 2 Token"}
     :path {:alias :p
-           :desc "Bonelab mod folder path"}}})
+           :desc "Bonelab mod folder path"}
+    :sync {:alias :s
+           :desc "Sync mods with subscribed mods from Mod.io"}}})
 
 (defn parse-args "returns [opts token]" [args]
   (let [opts (cli/parse-opts args cli-spec)]
     (when (:help opts)
+      (println "bmm -- a terminal application for managing bonelab mods")
       (println (show-help cli-spec))
       (throw (ex-info "" {})))
 
@@ -156,7 +159,7 @@ This will save it for future runs" {})))
           (println (str (inc n) "/" (count mods)) "finished " (<!! done))
           (recur (inc n)))))
     (println "Deleting tmp files...")
-    (fs/delete (fs/file "./bmm_tmp/"))))
+    (fs/delete-tree (fs/file "./bmm_tmp/"))))
 
 (defn -main [& args]
   (try (let [[opts token mod-path] (parse-args args)
