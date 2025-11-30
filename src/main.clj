@@ -162,6 +162,7 @@ This will save it for future runs" {})))
   (try (let [[opts token mod-path] (parse-args args)
              mods (get-all-pages "https://api.mod.io/v1/me/subscribed" token {"game_id" bonelab-id})]
          (when (:sync opts)
-           (download-subscribed mods token mod-path)))
+           (download-subscribed mods token mod-path))
+         (println "Finished all tasks!"))
        (catch clojure.lang.ExceptionInfo e
          (println (ex-message e)))))
