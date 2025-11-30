@@ -1,16 +1,20 @@
 (ns main
-  (:require [babashka.http-client :as http]
-            [babashka.fs :as fs]
-            [babashka.cli :as cli]
-            [cheshire.core :as json]
-            [clojure.java.io :as io]
-            [clojure.java.shell :as sh]
-            [clojure.pprint :as pp]
-            [clojure.core.async
-             :as async
-             :refer [>! <! >!! <!! go go-loop chan buffer close! thread
-                     alts! alts!! timeout]])
+  (:require
+   [babashka.cli :as cli]
+   [babashka.fs :as fs]
+   [babashka.http-client :as http]
+   [cheshire.core :as json]
+   [clojure.string :as str]
+   [clojure.pprint :as pp]
+   [clj-fuzzy.metrics :as fuzzy]
+   [clojure.core.async
+    :as async
+    :refer [<! <!! >! >!! chan go go-loop]]
+   [clojure.java.io :as io]
+   [clojure.java.shell :as sh])
   (:gen-class))
+
+((requiring-resolve 'hashp.install/install!))
 
 (defn show-help
   [spec]
@@ -28,8 +32,10 @@
     :token {:desc "Mod.io OAuth 2 Token"}
     :path {:alias :p
            :desc "Bonelab mod folder path"}
-    :sync {:alias :s
-           :desc "Sync mods with subscribed mods from Mod.io"}}})
+    :update {:alias :u
+             :desc "Download subscribed mods from Mod.io, and update them if they are out of date"}
+    :subscribe {:alias :s
+                :desc "Subscribe to mods that are on your disk, may not work for all mods\nIntended for subscribing to mods gotten from fusion"}}})
 
 (defn parse-args "returns [opts token]" [args]
   (let [opts (cli/parse-opts args cli-spec)]
@@ -66,14 +72,23 @@ This will save it for future runs" {})))
      (-> (fs/file api-key-path) (fs/read-all-lines) (first))
      (-> (fs/file bonelab-path) (fs/read-all-lines) (first))]))
 
-(defn get-retry [uri opts]
-  (let [resp  (http/get uri opts)]
+(defn http-retry [method uri opts]
+  (let [resp (method uri (merge {:throw false} opts))]
     (if (= (:status resp) 429)
       (do
         (println "retrying " uri "...")
         (Thread/sleep (:retry-after (:headers resp)))
-        (recur uri opts))
-      resp)))
+        (recur method uri opts))
+      (if (get #{200 201 202 203 204 205 206 207 300 301 302 303 304 307} (:status resp))
+        resp
+        (throw (ex-info (str "Exceptional status code: " (:status resp)
+                             "\n uri: " uri) resp))))))
+
+(defn get-retry [uri opts]
+  (http-retry http/get uri opts))
+
+(defn post-retry [uri opts]
+  (http-retry http/post uri opts))
 
 (defn get-all-pages
   ([link token]
@@ -104,7 +119,13 @@ This will save it for future runs" {})))
               {"game_id" bonelab-id})]
     mods))
 
-(defn download-subscribed [mods token path]
+(comment
+  (pp/pprint
+   (map
+     #(get % "name")
+     (list-subscribed token-a))))
+
+(defn download-mod-list [mods token path]
   (when-not (fs/exists? bmm-db-path)
     (fs/create-file bmm-db-path)
     (-> (fs/file bmm-db-path)
@@ -146,9 +167,9 @@ This will save it for future runs" {})))
           (recur))))
 
     (doseq [[idx mod]
-            (map-indexed (fn [a b] [a b]) (take 1 mods))]
+            (map-indexed (fn [a b] [a b]) mods)]
       (println (str "Started " (get mod "name")))
-      (let [url (get-in mod ["modfile" "download" "binary_url"])
+      (let [url (get-in mod ["modfile" "download" "binary_url"]) ;; todo fix to only download windows mods
             file-name (get-in mod ["modfile" "filename"])
             name (get mod "name")]
         (>!! download [url file-name name])))
@@ -158,14 +179,98 @@ This will save it for future runs" {})))
         (do
           (println (str (inc n) "/" (count mods)) "finished " (<!! done))
           (recur (inc n)))))
+
     (println "Deleting tmp files...")
     (fs/delete-tree (fs/file "./bmm_tmp/"))))
 
+(defn search-mod [name author token]
+  (first
+   (reverse
+    (sort-by #(fuzzy/dice name (get % "name"))
+             (get-all-pages (str "https://api.mod.io/v1/games/" bonelab-id "/mods")
+                            token
+                            {"submitted_by_display_name" author})))))
+;; usage
+(comment
+  (let [mod
+        (search-mod "BaBa's ToyBox" "BaBaCorp" token)]
+    [(get-in
+      mod
+      ["submitted_by"
+       "username"])
+     (get mod "name")]))
+
+(defn subscribe-installed
+  [token mod-path]
+  (println "warning!!! this will likely take a long time")
+  (when-not (fs/exists? bmm-db-path)
+    (fs/create-file bmm-db-path)
+    (-> (fs/file bmm-db-path)
+        (fs/write-lines ["{}"])))
+  (let [manifests (filter
+                   #(str/includes? % ".manifest")
+                   (fs/list-dir mod-path))
+        bmm-db (-> (fs/read-all-lines bmm-db-path)
+                   (#(apply str %))
+                   (json/parse-string))
+        pallets (filter
+                 #(not (str/includes? % "/SLZ."))
+                 (map
+                  (fn [file]
+                    (->
+                     (fs/read-all-lines file)
+                     (#(apply str %))
+                     (json/parse-string) ;; read manifest json
+                     (get-in ["objects"
+                              "1"
+                              "palletPath"])))
+                  manifests))
+        mod-titles (map
+                    (fn [file]
+                      (->
+                       (fs/read-all-lines
+                        (str/replace
+                         (str mod-path
+                              (second
+                               (str/split file
+                                          #"/AppData/LocalLow/Stress Level Zero/BONELAB\\Mods")))
+                         "\\" "/"))
+                       (#(apply str %))
+                       (json/parse-string) ;; read pallete json
+                       (get-in ["objects" "1"])
+                       ((fn [obj] [(get obj "title") (get obj "author")]))))
+                    pallets)
+        mods (->> (map (fn [[title author]]
+                         (println "searching" title author)
+                         (-> (search-mod title author token)
+                             ((fn [mod]
+                                (println "found" (get mod "name"))
+                                mod))))
+                       mod-titles)
+                  (filter (fn [{id "id"}]
+                            (nil? (get bmm-db id)))))]
+    (println "Number of mods being subscribed: " (count mods))
+    (doseq [[idx mod] (map-indexed (fn [idx mod] [idx mod]) mods)]
+     (println (str idx "/" (count mods)) "Subscribing to " (get mod "name"))
+     (post-retry
+      (str "https://api.mod.io/v1/games/"
+           bonelab-id "/mods/"
+           (get mod "id")
+           "/subscribe")
+      {:headers
+       {"Authorization" (str "Bearer " token)
+        "Content-Type" "application/x-www-form-urlencoded"
+        "Accept" "application/json"}}))))
+
 (defn -main [& args]
   (try (let [[opts token mod-path] (parse-args args)
-             mods (get-all-pages "https://api.mod.io/v1/me/subscribed" token {"game_id" bonelab-id})]
-         (when (:sync opts)
-           (download-subscribed mods token mod-path))
+             subscribed-mods (get-all-pages "https://api.mod.io/v1/me/subscribed" token {"game_id" bonelab-id})]
+         (def token-a token)
+         (when (:subscribe opts)
+           (subscribe-installed token mod-path))
+         (when (:update opts)
+           (download-mod-list subscribed-mods token mod-path))
          (println "Finished all tasks!"))
        (catch clojure.lang.ExceptionInfo e
-         (println (ex-message e)))))
+         (println
+          (ex-message e)))))
