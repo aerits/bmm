@@ -6,10 +6,12 @@
    [cheshire.core :as json]
    [clojure.string :as str]
    [clojure.pprint :as pp]
+   [progrock.core :as pr]
+   [clojure-watch.core :refer [start-watch]]
    [clj-fuzzy.metrics :as fuzzy]
    [clojure.core.async
     :as async
-    :refer [<! <!! >! >!! chan go go-loop]]
+    :refer [<! <!! >! >!! chan go go-loop close!]]
    [clojure.java.io :as io]
    [clojure.java.shell :as sh])
   (:gen-class))
@@ -80,7 +82,8 @@ This will save it for future runs" {})))
       (if (get #{200 201 202 203 204 205 206 207 300 301 302 303 304 307} (:status resp))
         resp
         (throw (ex-info (str "Exceptional status code: " (:status resp)
-                             "\n uri: " uri) resp))))))
+                             "\n uri: " uri
+                             "\n response: " (with-out-str (pp/pprint resp))) resp))))))
 
 (defn get-retry [uri opts]
   (http-retry http/get uri opts))
@@ -120,16 +123,31 @@ This will save it for future runs" {})))
 (comment
   (pp/pprint
    (map
-     #(get % "name")
-     (list-subscribed token-a))))
+    #(get % "name")
+    (list-subscribed token-a))))
+
+(defn to-mb [bytes]
+  (/ bytes 1048576))
+
+(defn format-bar [file]
+  (str (apply
+        str
+        (take 40 (str file
+                  (str/join (map (fn [x] (char 32)) (range 100))))))
+       "|\t[:bar] :percent% eta :remaining"))
+
+(def threads 4)
 
 (defn download-mod-list [mods token path]
   (when-not (fs/exists? bmm-db-path)
     (fs/create-file bmm-db-path)
     (-> (fs/file bmm-db-path)
         (fs/write-lines ["{}"])))
-  (let [download (chan 4)
-        done (chan)
+  (let [download (chan threads)
+        done (chan (count mods))
+        finished (chan)
+        mod-progress (atom {})
+        total-progress (atom nil)
         bmm-db (-> (fs/read-all-lines bmm-db-path)
                    (#(apply str %))
                    (json/parse-string))
@@ -143,17 +161,18 @@ This will save it for future runs" {})))
                        bmm-db
                        mods)]
 
-    (-> (fs/file bmm-db-path)
-        (fs/write-lines [(json/generate-string bmm-db {:pretty true})]))
-
     (println "Updating" (count mods) "mods")
-    (go-loop []
-      (let [[url file-name name] (<! download)]
-        (when url
-          (go
-            (fs/create-dir "./bmm_tmp/")
+    (reset! total-progress (pr/progress-bar (count mods)))
+    (when (fs/exists? "./bmm_tmp/")
+      (fs/delete-tree (fs/file "./bmm_tmp/")))
+    (fs/create-dir "./bmm_tmp/")
+    ;; recieve and download
+    (dotimes [_ threads]
+      (go-loop []
+        (let [[url file-name name] (<! download)]
+          (when url
             (io/copy
-             (:body (http/get url {:as :stream}))
+             (:body (get-retry url {:as :stream}))
              (io/file (str "./bmm_tmp/" file-name)))
             (if (= "Linux" (System/getProperty "os.name"))
               (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
@@ -161,23 +180,73 @@ This will save it for future runs" {})))
                      (fs/absolutize (str "./bmm_tmp/" file-name))
                      "-DestinationPath"
                      path))
-            (>! done name))
+            (>! done name)
+            (recur)))))
+    ;; recieve from above go loop and then print output
+    (go
+      (loop [n 0]
+        (if (= n (count mods))
+          n
+          (do
+            ;; (println (str (inc n) "/" (count mods)) "finished " (<!! done))
+            (<!! done)
+            (swap! total-progress assoc :progress n)
+            (recur (inc n)))))
+      (>! finished true))
+    ;; watch files changing
+    (start-watch [{:path "./bmm_tmp/"
+                   :event-types [:create :modify :delete]
+                   :callback
+                   (fn [event filename]
+                     (swap! mod-progress assoc-in
+                            [(fs/file-name filename) :progress] (to-mb (fs/size filename))))}])
+    (go
+      (loop []
+        (Thread/sleep 500)
+        (when (= 0 (count @mod-progress))
+          (recur)))
+      (loop []
+        (Thread/sleep 500)
+        (print (str (char 27) "[2J"))
+        (print (str (char 27) "[H"))
+        (doseq [[file bar] @mod-progress]
+          (when (and (not= (:total bar) (:progress bar))
+                     (not= 0 (:progress bar)))
+            (print
+             (str "\r"
+                  (pr/render bar
+                             {:length 20
+                              :format (format-bar file)
+                              :complete \#}) "\n"))))
+        (print (str "\r" (pr/render @total-progress)))
+        (flush)
+        (when (not= 0 (count @mod-progress))
           (recur))))
-
     (doseq [[idx mod]
             (map-indexed (fn [a b] [a b]) mods)]
-      (println (str "Started " (get mod "name")))
-      (let [url (get-in mod ["modfile" "download" "binary_url"]) ;; todo fix to only download windows mods
+      ;; (println (str "Started " (get mod "name")))
+      (let [id (get mod "id")
+            modfile (->
+                     (get-all-pages
+                      (str "https://api.mod.io/v1/games/"
+                           bonelab-id "/mods/" id "/files") token)
+                     ((fn [modfiles] (filter
+                                      #(= (get (first (get % "platforms"))
+                                               "platform")
+                                          "windows")
+                                      modfiles)))
+                     ((fn [modfiles] (sort-by #(get % "date_updated") modfiles)))
+                     (reverse)
+                     (first))
+            mod-size (get modfile "filesize")
+            url (get-in modfile ["download" "binary_url"]) ;; todo fix to only download windows mods
             file-name (get-in mod ["modfile" "filename"])
             name (get mod "name")]
+        (swap! mod-progress assoc file-name (pr/progress-bar (to-mb mod-size)))
         (>!! download [url file-name name])))
-    (loop [n 0]
-      (if (= n (count mods))
-        n
-        (do
-          (println (str (inc n) "/" (count mods)) "finished " (<!! done))
-          (recur (inc n)))))
-
+    (<!! finished)
+    (-> (fs/file bmm-db-path)
+        (fs/write-lines [(json/generate-string bmm-db {:pretty true})]))
     (println "Deleting tmp files...")
     (fs/delete-tree (fs/file "./bmm_tmp/"))))
 
@@ -249,25 +318,45 @@ This will save it for future runs" {})))
                             (nil? (get bmm-db id)))))]
     (println "Number of mods being subscribed: " (count mods))
     (doseq [[idx mod] (map-indexed (fn [idx mod] [idx mod]) mods)]
-     (println (str idx "/" (count mods)) "Subscribing to " (get mod "name"))
-     (post-retry
-      (str "https://api.mod.io/v1/games/"
-           bonelab-id "/mods/"
-           (get mod "id")
-           "/subscribe")
-      {:headers
-       {"Authorization" (str "Bearer " token)
-        "Content-Type" "application/x-www-form-urlencoded"
-        "Accept" "application/json"}}))))
+      (println (str idx "/" (count mods)) "Subscribing to " (get mod "name"))
+      (post-retry
+       (str "https://api.mod.io/v1/games/"
+            bonelab-id "/mods/"
+            (get mod "id")
+            "/subscribe")
+       {:headers
+        {"Authorization" (str "Bearer " token)
+         "Content-Type" "application/x-www-form-urlencoded"
+         "Accept" "application/json"}}))))
 
 (defn -main [& args]
-  (try (let [[opts token mod-path] (parse-args args)
-             subscribed-mods (get-all-pages "https://api.mod.io/v1/me/subscribed" token {"game_id" bonelab-id})]
+  (try (let [[opts token mod-path] (parse-args args)]
          (def token-a token)
          (when (:subscribe opts)
            (subscribe-installed token mod-path))
          (when (:update opts)
-           (download-mod-list subscribed-mods token mod-path))
+           (download-mod-list (list-subscribed token) token mod-path))
+         (when (:progress opts)
+           (println "starting")
+           (print "\n")
+           (loop [bar (pr/progress-bar 100)
+                  bar2 (pr/progress-bar 1000000000)]
+             (cond
+               (= (:progress bar) (:total bar))
+               nil
+               ;; (pr/print (pr/done bar))
+
+               ;; (= (:progress bar2) (:total bar2))
+               ;; (pr/print (pr/done bar2))
+
+               :else
+               (do (Thread/sleep 100)
+                   (print (str (char 27) "M"))
+                   (print (str "\r" (pr/render bar) "\n"))
+                   (print (str "\r" (pr/render bar2)))
+                   (flush)
+                   (recur (pr/tick bar) (pr/tick bar2 5000))))))
+
          (println "Finished all tasks!"))
        (catch clojure.lang.ExceptionInfo e
          (println

@@ -4,6 +4,8 @@
         org.babashka/cli {:mvn/version "0.8.67"}
         cheshire/cheshire {:mvn/version "6.1.0"}
         clj-fuzzy/clj-fuzzy {:mvn/version "0.4.1"}
+        progrock/progrock {:mvn/version "1.0.0"}
+        clojure-watch/clojure-watch {:mvn/version "0.1.14"}
         org.clojure/core.async {:mvn/version "1.8.741"}
         dev.weavejester/hashp {:mvn/version "0.5.1"}}
  :aliases
