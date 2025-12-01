@@ -13,4 +13,3 @@ You have to kinda delete all of your mods and reinstall them with `bmm -u`.
 
 # todo
 - generate package manager db without reinstalling all mods
-- fix issue of downloading mods for wrong platform (android instead of windows)
