@@ -133,10 +133,31 @@ This will save it for future runs" {})))
   (str (apply
         str
         (take 40 (str file
-                  (str/join (map (fn [x] (char 32)) (range 100))))))
+                      (str/join (map (fn [x] (char 32)) (range 100))))))
        "|\t[:bar] :percent% eta :remaining"))
 
-(def threads 4)
+(def threads 10)
+
+(defn download-and-unzip [url file-name path]
+  (when url
+   (io/copy
+    (:body (get-retry url {:as :stream}))
+    (io/file (str "./bmm_tmp/" file-name)))
+   (if (= "Linux" (System/getProperty "os.name"))
+     (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
+     (sh/sh "powershell" "Expand-Archive" "-LiteralPath"
+            (fs/absolutize (str "./bmm_tmp/" file-name))
+            "-DestinationPath"
+            path))))
+
+
+(defn render-bar [bar name]
+  (str "\r"
+      (pr/render
+       bar
+       {:length 20
+        :format (format-bar name)
+        :complete \#})))
 
 (defn download-mod-list [mods token path]
   (when-not (fs/exists? bmm-db-path)
@@ -169,77 +190,58 @@ This will save it for future runs" {})))
     ;; recieve and download
     (dotimes [_ threads]
       (go-loop []
-        (let [[url file-name name] (<! download)]
-          (when url
-            (io/copy
-             (:body (get-retry url {:as :stream}))
-             (io/file (str "./bmm_tmp/" file-name)))
-            (if (= "Linux" (System/getProperty "os.name"))
-              (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
-              (sh/sh "powershell" "Expand-Archive" "-LiteralPath"
-                     (fs/absolutize (str "./bmm_tmp/" file-name))
-                     "-DestinationPath"
-                     path))
-            (>! done name)
-            (recur)))))
+         (let [[url file-name name] (<! download)]
+           (when url
+             (<!
+              (async/thread (download-and-unzip url file-name path)))
+             (>! done name)
+             (recur)))))
     ;; recieve from above go loop and then print output
     (go
-      (loop [n 0]
-        (if (= n (count mods))
-          n
-          (do
-            ;; (println (str (inc n) "/" (count mods)) "finished " (<!! done))
-            (<!! done)
-            (swap! total-progress assoc :progress n)
-            (recur (inc n)))))
+      (dotimes [n (count mods)]
+          (<! done)
+          (swap! total-progress assoc :progress n))
       (>! finished true))
     ;; watch files changing
-    (start-watch [{:path "./bmm_tmp/"
-                   :event-types [:create :modify :delete]
-                   :callback
-                   (fn [event filename]
-                     (swap! mod-progress assoc-in
-                            [(fs/file-name filename) :progress] (to-mb (fs/size filename))))}])
+    (start-watch
+     [{:path "./bmm_tmp/"
+       :event-types [:create :modify :delete]
+       :callback
+       (fn [event filename]
+         (swap! mod-progress assoc-in
+                [(fs/file-name filename) :progress] (to-mb (fs/size filename))))}])
+
     (go
-      (loop []
-        (Thread/sleep 500)
-        (when (= 0 (count @mod-progress))
-          (recur)))
-      (loop []
-        (Thread/sleep 500)
-        (print (str (char 27) "[2J"))
-        (print (str (char 27) "[H"))
-        (doseq [[file bar] @mod-progress]
-          (when (and (not= (:total bar) (:progress bar))
-                     (not= 0 (:progress bar)))
-            (print
-             (str "\r"
-                  (pr/render bar
-                             {:length 20
-                              :format (format-bar file)
-                              :complete \#}) "\n"))))
-        (print (str "\r" (pr/render @total-progress)))
-        (flush)
-        (when (not= 0 (count @mod-progress))
-          (recur))))
-    (doseq [[idx mod]
-            (map-indexed (fn [a b] [a b]) mods)]
-      ;; (println (str "Started " (get mod "name")))
+      (while (= 0 (count @mod-progress))
+        (<! (async/thread (Thread/sleep 500))))
+      (while (not= 0 (count @mod-progress))[]
+        (<!
+         (async/thread (Thread/sleep 500)
+          (print (str (char 27) "[2J")) ;; clear screen
+          (print (str (char 27) "[H")) ;; move cursor to 0,0
+          (doseq [[file bar] @mod-progress]
+                 (when (and (not= (:total bar) (:progress bar))
+                            (not= 0 (:progress bar)))
+                       (print (str (render-bar bar file) "\n"))))
+          (print (str "\r" (pr/render @total-progress)))
+          (flush)))))
+
+    (doseq [mod mods]
       (let [id (get mod "id")
             modfile (->
                      (get-all-pages
                       (str "https://api.mod.io/v1/games/"
-                           bonelab-id "/mods/" id "/files") token)
-                     ((fn [modfiles] (filter
+                           bonelab-id "/mods/" id "/files") token) ;; get modfiles
+                     ((fn [modfiles] (filter ;; filter only windows
                                       #(= (get (first (get % "platforms"))
                                                "platform")
                                           "windows")
                                       modfiles)))
                      ((fn [modfiles] (sort-by #(get % "date_updated") modfiles)))
                      (reverse)
-                     (first))
+                     (first)) ;; sort by newest
             mod-size (get modfile "filesize")
-            url (get-in modfile ["download" "binary_url"]) ;; todo fix to only download windows mods
+            url (get-in modfile ["download" "binary_url"])
             file-name (get-in mod ["modfile" "filename"])
             name (get mod "name")]
         (swap! mod-progress assoc file-name (pr/progress-bar (to-mb mod-size)))
