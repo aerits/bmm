@@ -140,24 +140,23 @@ This will save it for future runs" {})))
 
 (defn download-and-unzip [url file-name path]
   (when url
-   (io/copy
-    (:body (get-retry url {:as :stream}))
-    (io/file (str "./bmm_tmp/" file-name)))
-   (if (= "Linux" (System/getProperty "os.name"))
-     (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
-     (sh/sh "powershell" "Expand-Archive" "-LiteralPath"
-            (fs/absolutize (str "./bmm_tmp/" file-name))
-            "-DestinationPath"
-            path))))
-
+    (io/copy
+     (:body (get-retry url {:as :stream}))
+     (io/file (str "./bmm_tmp/" file-name)))
+    (if (= "Linux" (System/getProperty "os.name"))
+      (sh/sh "unzip" (str "./bmm_tmp/" file-name) "-d" path)
+      (sh/sh "powershell" "Expand-Archive" "-LiteralPath"
+             (fs/absolutize (str "./bmm_tmp/" file-name))
+             "-DestinationPath"
+             path))))
 
 (defn render-bar [bar name]
   (str "\r"
-      (pr/render
-       bar
-       {:length 20
-        :format (format-bar name)
-        :complete \#})))
+       (pr/render
+        bar
+        {:length 20
+         :format (format-bar name)
+         :complete \#})))
 
 (defn download-mod-list [mods token path threads]
   (when-not (fs/exists? bmm-db-path)
@@ -190,17 +189,17 @@ This will save it for future runs" {})))
     ;; recieve and download
     (dotimes [_ threads]
       (go-loop []
-         (let [[url file-name name] (<! download)]
-           (when url
-             (<!
-              (async/thread (download-and-unzip url file-name path)))
-             (>! done name)
-             (recur)))))
+        (let [[url file-name name] (<! download)]
+          (when url
+            (<!
+             (async/thread (download-and-unzip url file-name path)))
+            (>! done name)
+            (recur)))))
     ;; recieve from above go loop and then print output
     (go
       (dotimes [n (count mods)]
-          (<! done)
-          (swap! total-progress assoc :progress n))
+        (<! done)
+        (swap! total-progress assoc :progress n))
       (>! finished true))
     ;; watch files changing
     (start-watch
@@ -214,17 +213,17 @@ This will save it for future runs" {})))
     (go
       (while (= 0 (count @mod-progress))
         (<! (async/thread (Thread/sleep 500))))
-      (while (not= 0 (count @mod-progress))[]
-        (<!
-         (async/thread (Thread/sleep 500)
-          (print (str (char 27) "[2J")) ;; clear screen
-          (print (str (char 27) "[H")) ;; move cursor to 0,0
-          (doseq [[file bar] @mod-progress]
-                 (when (and (not= (:total bar) (:progress bar))
-                            (not= 0 (:progress bar)))
-                       (print (str (render-bar bar file) "\n"))))
-          (print (str "\r" (pr/render @total-progress)))
-          (flush)))))
+      (while (not= 0 (count @mod-progress)) []
+             (<!
+              (async/thread (Thread/sleep 500)
+                            (print (str (char 27) "[2J")) ;; clear screen
+                            (print (str (char 27) "[H")) ;; move cursor to 0,0
+                            (doseq [[file bar] @mod-progress]
+                              (when (and (not= (:total bar) (:progress bar))
+                                         (not= 0 (:progress bar)))
+                                (print (str (render-bar bar file) "\n"))))
+                            (print (str "\r" (pr/render @total-progress)))
+                            (flush)))))
 
     (doseq [mod mods]
       (let [id (get mod "id")
@@ -332,39 +331,30 @@ This will save it for future runs" {})))
          "Accept" "application/json"}}))))
 
 (defn -main [& args]
-  (def api-key-path (str (fs/home) "/.bmm_token"))
-  (def bonelab-path (str (fs/home) "/.bmm_bone_path"))
-  (def bmm-db-path (str (fs/home) "/.bmm_db.json"))
-  (try (let [[opts token mod-path] (parse-args args)]
-         (def token-a token)
-         (when (:subscribe opts)
-           (subscribe-installed token mod-path))
-         (when (:update opts)
-           (download-mod-list
-            (list-subscribed token) token mod-path
-            (if (:threads opts) (:threads opts) 4)))
-         (when (:progress opts)
-           (println "starting")
-           (print "\n")
-           (loop [bar (pr/progress-bar 100)
-                  bar2 (pr/progress-bar 1000000000)]
-             (cond
-               (= (:progress bar) (:total bar))
-               nil
-               ;; (pr/print (pr/done bar))
+  (with-redefs [api-key-path (str (fs/home) "/.bmm_token")
+                bonelab-path (str (fs/home) "/.bmm_bone_path")
+                bmm-db-path (str (fs/home) "/.bmm_db.json")]
+    (try (let [[opts token mod-path] (parse-args args)]
+           (def token-a token)
+           (when (:subscribe opts)
+             (subscribe-installed token mod-path))
+           (when (:update opts)
+             (download-mod-list
+              (list-subscribed token) token mod-path
+              (if (:threads opts) (:threads opts) 4)))
+           (when (:progress opts)
+             (println "starting")
+             (print "\n")
+             (loop [bar (pr/progress-bar 100)
+                    bar2 (pr/progress-bar 1000000000)]
+               (Thread/sleep 100)
+               (print (str (char 27) "M"))
+               (print (str "\r" (pr/render bar) "\n"))
+               (print (str "\r" (pr/render bar2)))
+               (flush)
+               (recur (pr/tick bar) (pr/tick bar2 5000))))
 
-               ;; (= (:progress bar2) (:total bar2))
-               ;; (pr/print (pr/done bar2))
-
-               :else
-               (do (Thread/sleep 100)
-                   (print (str (char 27) "M"))
-                   (print (str "\r" (pr/render bar) "\n"))
-                   (print (str "\r" (pr/render bar2)))
-                   (flush)
-                   (recur (pr/tick bar) (pr/tick bar2 5000))))))
-
-         (println "Finished all tasks!"))
-       (catch clojure.lang.ExceptionInfo e
-         (println
-          (ex-message e)))))
+           (println "Finished all tasks!"))
+         (catch clojure.lang.ExceptionInfo e
+           (println
+            (ex-message e))))))
