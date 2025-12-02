@@ -32,6 +32,8 @@
     :token {:desc "Mod.io OAuth 2 Token"}
     :path {:alias :p
            :desc "Bonelab mod folder path"}
+    :threads {:alias :t
+              :desc "Number of threads to use while downloading"}
     :update {:alias :u
              :desc "Download subscribed mods from Mod.io, and update them if they are out of date"}
     :subscribe {:alias :s
@@ -136,8 +138,6 @@ This will save it for future runs" {})))
                       (str/join (map (fn [x] (char 32)) (range 100))))))
        "|\t[:bar] :percent% eta :remaining"))
 
-(def threads 10)
-
 (defn download-and-unzip [url file-name path]
   (when url
    (io/copy
@@ -159,7 +159,7 @@ This will save it for future runs" {})))
         :format (format-bar name)
         :complete \#})))
 
-(defn download-mod-list [mods token path]
+(defn download-mod-list [mods token path threads]
   (when-not (fs/exists? bmm-db-path)
     (fs/create-file bmm-db-path)
     (-> (fs/file bmm-db-path)
@@ -337,7 +337,9 @@ This will save it for future runs" {})))
          (when (:subscribe opts)
            (subscribe-installed token mod-path))
          (when (:update opts)
-           (download-mod-list (list-subscribed token) token mod-path))
+           (download-mod-list
+            (list-subscribed token) token mod-path
+            (if (:threads opts) (:threads opts) 4)))
          (when (:progress opts)
            (println "starting")
            (print "\n")
