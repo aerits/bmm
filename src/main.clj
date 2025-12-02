@@ -20,9 +20,9 @@
   [spec]
   (cli/format-opts (merge spec {:order (vec (keys (:spec spec)))})))
 
-(def api-key-path (str (fs/home) "/.bmm_token"))
-(def bonelab-path (str (fs/home) "/.bmm_bone_path"))
-(def bmm-db-path (str (fs/home) "/.bmm_db.json"))
+(defn api-key-path [] (str (fs/home) "/.bmm_token"))
+(defn bonelab-path [] (str (fs/home) "/.bmm_bone_path"))
+(defn bmm-db-path [] (str (fs/home) "/.bmm_db.json"))
 (def bonelab-id 3809)
 
 (def cli-spec
@@ -48,31 +48,31 @@
 
     (when (:token opts)
       (println "saving user data...")
-      (fs/create-file api-key-path)
-      (-> (fs/file api-key-path)
+      (fs/create-file ( api-key-path))
+      (-> (fs/file ( api-key-path))
           (fs/write-lines [(:token opts)])))
 
     (when (:path opts)
       (println "saving user data...")
-      (fs/create-file bonelab-path)
-      (-> (fs/file bonelab-path)
+      (fs/create-file ( bonelab-path))
+      (-> (fs/file ( bonelab-path))
           (fs/write-lines [(:path opts)])))
 
-    (when-not (fs/exists? api-key-path)
+    (when-not (fs/exists? ( api-key-path))
       (throw (ex-info
               "Missing OAuth 2 access token.
 Rerun the program with --token.
 This will save it for future runs" {})))
 
-    (when-not (fs/exists? bonelab-path)
+    (when-not (fs/exists? ( bonelab-path))
       (throw (ex-info
               "Missing bonelab mod folder path.
 Rerun the program with --path
 This will save it for future runs" {})))
 
     [opts
-     (-> (fs/file api-key-path) (fs/read-all-lines) (first))
-     (-> (fs/file bonelab-path) (fs/read-all-lines) (first))]))
+     (-> (fs/file ( api-key-path )) (fs/read-all-lines) (first))
+     (-> (fs/file ( bonelab-path )) (fs/read-all-lines) (first))]))
 
 (defn http-retry [method uri opts]
   (let [resp (method uri (merge {:throw false} opts))]
@@ -159,16 +159,16 @@ This will save it for future runs" {})))
          :complete \#})))
 
 (defn download-mod-list [mods token path threads]
-  (when-not (fs/exists? bmm-db-path)
-    (fs/create-file bmm-db-path)
-    (-> (fs/file bmm-db-path)
+  (when-not (fs/exists? ( bmm-db-path))
+    (fs/create-file ( bmm-db-path))
+    (-> (fs/file ( bmm-db-path))
         (fs/write-lines ["{}"])))
   (let [download (chan threads)
         done (chan (count mods))
         finished (chan)
         mod-progress (atom {})
         total-progress (atom nil)
-        bmm-db (-> (fs/read-all-lines bmm-db-path)
+        bmm-db (-> (fs/read-all-lines ( bmm-db-path))
                    (#(apply str %))
                    (json/parse-string))
         mods (->> (sort-by #(get-in % ["modfile" "filesize"]) mods)
@@ -246,7 +246,7 @@ This will save it for future runs" {})))
         (swap! mod-progress assoc file-name (pr/progress-bar (to-mb mod-size)))
         (>!! download [url file-name name])))
     (<!! finished)
-    (-> (fs/file bmm-db-path)
+    (-> (fs/file ( bmm-db-path))
         (fs/write-lines [(json/generate-string bmm-db {:pretty true})]))
     (println "Deleting tmp files...")
     (fs/delete-tree (fs/file "./bmm_tmp/"))))
@@ -271,14 +271,14 @@ This will save it for future runs" {})))
 (defn subscribe-installed
   [token mod-path]
   (println "warning!!! this will likely take a long time")
-  (when-not (fs/exists? bmm-db-path)
-    (fs/create-file bmm-db-path)
-    (-> (fs/file bmm-db-path)
+  (when-not (fs/exists? ( bmm-db-path))
+    (fs/create-file ( bmm-db-path))
+    (-> (fs/file ( bmm-db-path))
         (fs/write-lines ["{}"])))
   (let [manifests (filter
                    #(str/includes? % ".manifest")
                    (fs/list-dir mod-path))
-        bmm-db (-> (fs/read-all-lines bmm-db-path)
+        bmm-db (-> (fs/read-all-lines ( bmm-db-path ))
                    (#(apply str %))
                    (json/parse-string))
         pallets (filter
@@ -331,10 +331,7 @@ This will save it for future runs" {})))
          "Accept" "application/json"}}))))
 
 (defn -main [& args]
-  (with-redefs [api-key-path (str (fs/home) "/.bmm_token")
-                bonelab-path (str (fs/home) "/.bmm_bone_path")
-                bmm-db-path (str (fs/home) "/.bmm_db.json")]
-    (try (let [[opts token mod-path] (parse-args args)]
+  (try (let [[opts token mod-path] (parse-args args)]
            (def token-a token)
            (when (:subscribe opts)
              (subscribe-installed token mod-path))
@@ -355,6 +352,6 @@ This will save it for future runs" {})))
                (recur (pr/tick bar) (pr/tick bar2 5000))))
 
            (println "Finished all tasks!"))
-         (catch clojure.lang.ExceptionInfo e
-           (println
-            (ex-message e))))))
+       (catch clojure.lang.ExceptionInfo e
+         (println
+          (ex-message e)))))
