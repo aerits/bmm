@@ -332,6 +332,9 @@ This will save it for future runs" {})))
          "Accept" "application/json"}}))))
 
 (defn -main [& args]
+  (def api-key-path (str (fs/home) "/.bmm_token"))
+  (def bonelab-path (str (fs/home) "/.bmm_bone_path"))
+  (def bmm-db-path (str (fs/home) "/.bmm_db.json"))
   (try (let [[opts token mod-path] (parse-args args)]
          (def token-a token)
          (when (:subscribe opts)
