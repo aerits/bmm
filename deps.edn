@@ -1,13 +1,17 @@
 {:paths ["src"]
- :deps {org.babashka/http-client {:mvn/version "0.4.22"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.3"}
+        org.babashka/http-client {:mvn/version "0.4.22"}
         babashka/fs {:mvn/version "0.5.30"}
         org.babashka/cli {:mvn/version "0.8.67"}
-        cheshire/cheshire {:mvn/version "6.1.0"}
+        ;; cheshire/cheshire {:mvn/version "6.1.0"}
         clj-fuzzy/clj-fuzzy {:mvn/version "0.4.1"}
         progrock/progrock {:mvn/version "1.0.0"}
-        clojure-watch/clojure-watch {:mvn/version "0.1.14"}
+        ;; clojure-watch/clojure-watch {:mvn/version "0.1.14"}
         org.clojure/core.async {:mvn/version "1.8.741"}
-        dev.weavejester/hashp {:mvn/version "0.5.1"}}
+        dev.weavejester/hashp {:mvn/version "0.5.1"}
+        com.github.clj-easy/graal-build-time {:mvn/version "1.0.5"}
+        com.fasterxml.jackson.core/jackson-core {:mvn/version "2.20.0"}
+        org.clojure/data.json {:mvn/version "2.5.1"}}
  :aliases
  {; ... other aliases ...
 

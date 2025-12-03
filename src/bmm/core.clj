@@ -1,19 +1,22 @@
-(ns main
+(set! *warn-on-reflection* true)
+(ns bmm.core
   (:require
    [babashka.cli :as cli]
    [babashka.fs :as fs]
    [babashka.http-client :as http]
-   [cheshire.core :as json]
+   ;; [cheshire.core :as json]
+   [clojure.data.json :as json]
    [clojure.string :as str]
    [clojure.pprint :as pp]
    [progrock.core :as pr]
-   [clojure-watch.core :refer [start-watch]]
+   ;; [clojure-watch.core :refer [start-watch]]
    [clj-fuzzy.metrics :as fuzzy]
    [clojure.core.async
     :as async
     :refer [<! <!! >! >!! chan go go-loop close!]]
    [clojure.java.io :as io]
-   [clojure.java.shell :as sh])
+   [clojure.java.shell :as sh]
+   [bmm.watch :as watch])
   (:gen-class))
 
 (defn show-help
@@ -79,7 +82,7 @@ This will save it for future runs" {})))
     (if (= (:status resp) 429)
       (do
         (println "retrying " uri "...")
-        (Thread/sleep (:retry-after (:headers resp)))
+        (Thread/sleep ^long (:retry-after (:headers resp)))
         (recur method uri opts))
       (if (get #{200 201 202 203 204 205 206 207 300 301 302 303 304 307} (:status resp))
         resp
@@ -108,7 +111,7 @@ This will save it for future runs" {})))
                     :query-params
                     (merge {"_offset" offset} filters)})
                   (:body)
-                  (json/parse-string))
+                  (json/read-str))
          total (get resp "result_total")]
      (if (> (- total offset) 0)
        (recur link token (+ 100 offset)
@@ -170,7 +173,7 @@ This will save it for future runs" {})))
         total-progress (atom nil)
         bmm-db (-> (fs/read-all-lines ( bmm-db-path))
                    (#(apply str %))
-                   (json/parse-string))
+                   (json/read-str))
         mods (->> (sort-by #(get-in % ["modfile" "filesize"]) mods)
                   (filter
                    (fn [{id "id" {version "version"} "modfile" :as mod}]
@@ -202,28 +205,33 @@ This will save it for future runs" {})))
         (swap! total-progress assoc :progress n))
       (>! finished true))
     ;; watch files changing
-    (start-watch
-     [{:path "./bmm_tmp/"
-       :event-types [:create :modify :delete]
-       :callback
-       (fn [event filename]
-         (swap! mod-progress assoc-in
-                [(fs/file-name filename) :progress] (to-mb (fs/size filename))))}])
+    ;; (start-watch
+    ;;  [{:path "./bmm_tmp/"
+    ;;    :event-types [:create :modify :delete]
+    ;;    :callback
+    ;;    (fn [event filename]
+    ;;      (swap! mod-progress assoc-in
+    ;;             [(fs/file-name filename) :progress] (to-mb (fs/size filename))))}])
+    (watch/start-watch-service
+     "./bmm_tmp/"
+     (fn [_event filename]
+       (swap! mod-progress assoc-in
+         [(fs/file-name filename) :progress] (to-mb (fs/size filename)))))
 
     (go
       (while (= 0 (count @mod-progress))
         (<! (async/thread (Thread/sleep 500))))
       (while (not= 0 (count @mod-progress)) []
              (<!
-              (async/thread (Thread/sleep 500)
-                            (print (str (char 27) "[2J")) ;; clear screen
-                            (print (str (char 27) "[H")) ;; move cursor to 0,0
-                            (doseq [[file bar] @mod-progress]
-                              (when (and (not= (:total bar) (:progress bar))
-                                         (not= 0 (:progress bar)))
-                                (print (str (render-bar bar file) "\n"))))
-                            (print (str "\r" (pr/render @total-progress)))
-                            (flush)))))
+              (async/thread (Thread/sleep 500)))
+             (print (str (char 27) "[2J")) ;; clear screen
+             (print (str (char 27) "[H")) ;; move cursor to 0,0
+             (doseq [[file bar] @mod-progress]
+               (when (and (not= (:total bar) (:progress bar))
+                          (not= 0 (:progress bar)))
+                 (print (str (render-bar bar file) "\n")))
+              (print (str "\r" (pr/render @total-progress)))
+              (flush))))
 
     (doseq [mod mods]
       (let [id (get mod "id")
@@ -247,7 +255,7 @@ This will save it for future runs" {})))
         (>!! download [url file-name name])))
     (<!! finished)
     (-> (fs/file ( bmm-db-path))
-        (fs/write-lines [(json/generate-string bmm-db {:pretty true})]))
+        (fs/write-lines [(json/write-str bmm-db)]))
     (println "Deleting tmp files...")
     (fs/delete-tree (fs/file "./bmm_tmp/"))))
 
@@ -278,9 +286,9 @@ This will save it for future runs" {})))
   (let [manifests (filter
                    #(str/includes? % ".manifest")
                    (fs/list-dir mod-path))
-        bmm-db (-> (fs/read-all-lines ( bmm-db-path ))
+        bmm-db (-> (fs/read-all-lines ( bmm-db-path))
                    (#(apply str %))
-                   (json/parse-string))
+                   (json/read-str))
         pallets (filter
                  #(not (str/includes? % "/SLZ."))
                  (map
@@ -288,7 +296,7 @@ This will save it for future runs" {})))
                     (->
                      (fs/read-all-lines file)
                      (#(apply str %))
-                     (json/parse-string) ;; read manifest json
+                     (json/read-str) ;; read manifest json
                      (get-in ["objects"
                               "1"
                               "palletPath"])))
@@ -304,7 +312,7 @@ This will save it for future runs" {})))
                                           #"/AppData/LocalLow/Stress Level Zero/BONELAB\\Mods")))
                          "\\" "/"))
                        (#(apply str %))
-                       (json/parse-string) ;; read pallete json
+                       (json/read-str) ;; read pallete json
                        (get-in ["objects" "1"])
                        ((fn [obj] [(get obj "title") (get obj "author")]))))
                     pallets)

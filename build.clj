@@ -17,16 +17,17 @@
 (defn uber [_]
   (clean nil)
 
-  (b/copy-dir {:src-dirs   ["resources"]         ; copy resources
+  (b/copy-dir {:src-dirs   ["src" "resources"]         ; copy resources
                :target-dir jar-content})
 
   (b/compile-clj {:basis     basis               ; compile clojure code
+                  :ns-compile '[bmm.core]
                   :src-dirs  ["src"]
                   :class-dir jar-content})
 
   (b/uber {:class-dir jar-content                ; create uber file
            :uber-file uber-file-name
            :basis     basis
-           :main      'main})                ; here we specify the entry point for uberjar
+           :main      'bmm.core})                ; here we specify the entry point for uberjar
 
   (println (format "Uber file created: \"%s\"" uber-file-name)))
