@@ -205,13 +205,6 @@ This will save it for future runs" {})))
         (swap! total-progress assoc :progress n))
       (>! finished true))
     ;; watch files changing
-    ;; (start-watch
-    ;;  [{:path "./bmm_tmp/"
-    ;;    :event-types [:create :modify :delete]
-    ;;    :callback
-    ;;    (fn [event filename]
-    ;;      (swap! mod-progress assoc-in
-    ;;             [(fs/file-name filename) :progress] (to-mb (fs/size filename))))}])
     (watch/start-watch-service
      "./bmm_tmp/"
      (fn [_event filename]

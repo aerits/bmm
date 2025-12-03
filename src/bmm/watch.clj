@@ -10,6 +10,7 @@
            [java.net URI]
            [java.nio.file.attribute BasicFileAttributes]))
 
+(def events (into-array [StandardWatchEventKinds/ENTRY_MODIFY]))
 (defn start-watch-service
   "
   dir-path is the path
@@ -18,18 +19,14 @@
   [^String dir-path on-event]
   (let [path ^Path (.toPath (io/file dir-path))
         watch-service ^WatchService (.newWatchService (FileSystems/getDefault))
-        watch-key (.register path watch-service
-                            (into-array
-                                         [StandardWatchEventKinds/ENTRY_CREATE
-                                          StandardWatchEventKinds/ENTRY_DELETE
-                                          StandardWatchEventKinds/ENTRY_MODIFY]))]
+        watch-key (.register path watch-service events)]
     (println "Watching directory for changes:" dir-path)
 
     (async/thread
      (loop []
        (let [key ^WatchKey (.take watch-service)]
          (doseq [event ^WatchEvent (.pollEvents key)]
-           (on-event (WatchEvent/.kind event)
+           (on-event nil
                      (str dir-path (-> (WatchEvent/.context event)
                                        (.toString)))))
 
@@ -40,3 +37,6 @@
 
 (comment
   (start-watch-service "./bmm_tmp/" (fn [event file] (println file))))
+
+;; (let [events (into-array [StandardWatchEventKinds/ENTRY_MODIFY])]
+;;     (println events))
