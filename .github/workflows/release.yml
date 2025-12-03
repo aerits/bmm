@@ -27,7 +27,7 @@ jobs:
     - name: compile uberjar
       run: clojure -T:build uber
     - name: compile native-image
-      run: native-image -jar ./target/*.jar --initialize-at-build-time bmm-${{matrix.os}}
+      run: native-image -jar ./target/*.jar --initialize-at-build-time=clojure.lang bmm-${{matrix.os}}
     - name: release
       uses: ncipollo/release-action@v1
       with:
